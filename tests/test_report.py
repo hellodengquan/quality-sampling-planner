@@ -16,26 +16,35 @@ from qsp.report import (
 def population():
     cat_pattern = ["X"] * 15 + ["Y"] * 10 + ["Z"] * 5
     cats = (cat_pattern * 4)[:100]
-    return pd.DataFrame({
-        "id": list(range(100)),
-        "batch": ["A"] * 30 + ["B"] * 40 + ["C"] * 30,
-        "category": cats,
-        "value": [i * 2 for i in range(100)],
-    })
+    return pd.DataFrame(
+        {
+            "id": list(range(100)),
+            "batch": ["A"] * 30 + ["B"] * 40 + ["C"] * 30,
+            "category": cats,
+            "value": [i * 2 for i in range(100)],
+        }
+    )
 
 
 @pytest.fixture
 def good_sample(population):
-    return pd.concat([
-        population[population["batch"] == "A"].sample(10, random_state=1),
-        population[population["batch"] == "B"].sample(10, random_state=1),
-        population[population["batch"] == "C"].sample(10, random_state=1),
-    ], ignore_index=True)
+    return pd.concat(
+        [
+            population[population["batch"] == "A"].sample(10, random_state=1),
+            population[population["batch"] == "B"].sample(10, random_state=1),
+            population[population["batch"] == "C"].sample(10, random_state=1),
+        ],
+        ignore_index=True,
+    )
 
 
 @pytest.fixture
 def biased_sample(population):
-    return population[population["batch"] == "A"].sample(20, random_state=2).reset_index(drop=True)
+    return (
+        population[population["batch"] == "A"]
+        .sample(20, random_state=2)
+        .reset_index(drop=True)
+    )
 
 
 class TestOverallCoverage:
@@ -94,8 +103,10 @@ class TestNumericalSummary:
 class TestGenerateReport:
     def test_report_structure(self, population, good_sample):
         report = generate_report(
-            population, good_sample,
-            dimensions=["category"], batch_col="batch",
+            population,
+            good_sample,
+            dimensions=["category"],
+            batch_col="batch",
         )
         assert report.population_size == 100
         assert report.sample_size == 30

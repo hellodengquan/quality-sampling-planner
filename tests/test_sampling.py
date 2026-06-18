@@ -6,17 +6,16 @@ import pandas as pd
 import pytest
 
 from qsp.sampling import (
-    SamplingMethod,
     SampleSizeMode,
+    SamplingMethod,
     SamplingRule,
+    _detect_pps_skew,
     apply_sampling,
     calculate_statistical_sample_size,
     cluster_sample,
     determine_sample_size,
     load_rule_from_config,
     pps_sample,
-    _detect_pps_skew,
-    PPSSkewWarning,
     simple_random_sample,
     stratified_sample,
     systematic_sample,
@@ -25,21 +24,25 @@ from qsp.sampling import (
 
 @pytest.fixture
 def sample_df():
-    return pd.DataFrame({
-        "id": list(range(200)),
-        "batch_id": ["A"] * 50 + ["B"] * 50 + ["C"] * 50 + ["D"] * 50,
-        "category": (["X"] * 25 + ["Y"] * 25) * 4,
-        "value": [i * 1.5 for i in range(200)],
-    })
+    return pd.DataFrame(
+        {
+            "id": list(range(200)),
+            "batch_id": ["A"] * 50 + ["B"] * 50 + ["C"] * 50 + ["D"] * 50,
+            "category": (["X"] * 25 + ["Y"] * 25) * 4,
+            "value": [i * 1.5 for i in range(200)],
+        }
+    )
 
 
 @pytest.fixture
 def small_df():
-    return pd.DataFrame({
-        "id": [1, 2, 3, 4, 5, 6],
-        "batch_id": ["A", "A", "B", "B", "C", "C"],
-        "value": [10, 20, 30, 40, 50, 60],
-    })
+    return pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5, 6],
+            "batch_id": ["A", "A", "B", "B", "C", "C"],
+            "value": [10, 20, 30, 40, 50, 60],
+        }
+    )
 
 
 class TestSampleSizeCalculation:
@@ -83,7 +86,9 @@ class TestSimpleRandomSample:
     def test_seed_reproducible(self, sample_df):
         a = simple_random_sample(sample_df, 20, seed=7)
         b = simple_random_sample(sample_df, 20, seed=7)
-        pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
+        pd.testing.assert_frame_equal(
+            a.reset_index(drop=True), b.reset_index(drop=True)
+        )
 
     def test_empty_df_raises(self):
         with pytest.raises(Exception):
@@ -159,7 +164,9 @@ class TestClusterSample:
     def test_seed_reproducible(self, sample_df):
         a = cluster_sample(sample_df, 50, "batch_id", seed=7, min_clusters=2)
         b = cluster_sample(sample_df, 50, "batch_id", seed=7, min_clusters=2)
-        pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
+        pd.testing.assert_frame_equal(
+            a.reset_index(drop=True), b.reset_index(drop=True)
+        )
 
 
 class TestPPSSample:
@@ -173,10 +180,12 @@ class TestPPSSample:
         assert result["id"].nunique() == 30
 
     def test_large_size_equals_population_without_replacement(self):
-        df = pd.DataFrame({
-            "id": [1, 2, 3, 4, 5],
-            "size": [10, 20, 30, 40, 50],
-        })
+        df = pd.DataFrame(
+            {
+                "id": [1, 2, 3, 4, 5],
+                "size": [10, 20, 30, 40, 50],
+            }
+        )
         n = len(df)
         result = pps_sample(df, n, "size", seed=42, replace=False)
         assert len(result) == n
@@ -253,20 +262,24 @@ class TestPPSSkewDetection:
 
 class TestPPSFallbackBranches:
     def test_has_zero_weights_fallback_excludes_zeros(self):
-        df = pd.DataFrame({
-            "id": list(range(10)),
-            "size": [0, 0, 0, 10, 20, 30, 40, 50, 60, 70],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(10)),
+                "size": [0, 0, 0, 10, 20, 30, 40, 50, 60, 70],
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
         assert len(result) == 5
         for _, row in result.iterrows():
             assert row["size"] > 0
 
     def test_has_zero_weights_no_fallback_raises(self):
-        df = pd.DataFrame({
-            "id": list(range(5)),
-            "size": [0, 0, 10, 20, 30],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(5)),
+                "size": [0, 0, 10, 20, 30],
+            }
+        )
         with pytest.raises(ValueError, match="极不均衡"):
             pps_sample(df, 3, "size", seed=42, fallback=False)
 
@@ -283,46 +296,56 @@ class TestPPSFallbackBranches:
         assert result["id"].nunique() == 6
 
     def test_single_dominant_weight_cap_fallback(self):
-        df = pd.DataFrame({
-            "id": list(range(6)),
-            "size": [10000, 1, 1, 1, 1, 1],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(6)),
+                "size": [10000, 1, 1, 1, 1, 1],
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
         assert len(result) == 5
         assert result["id"].nunique() == 5
 
     def test_single_dominant_cap_with_replace(self):
-        df = pd.DataFrame({
-            "id": list(range(6)),
-            "size": [10000, 1, 1, 1, 1, 1],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(6)),
+                "size": [10000, 1, 1, 1, 1, 1],
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
         assert len(result) == 5
         assert result["id"].nunique() == 5
 
     def test_single_dominant_cap_with_replace_allows_dup(self):
-        df = pd.DataFrame({
-            "id": list(range(5)),
-            "size": [9999, 1, 1, 1, 1],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(5)),
+                "size": [9999, 1, 1, 1, 1],
+            }
+        )
         result = pps_sample(df, 8, "size", seed=42, replace=True, fallback=True)
         assert len(result) == 8
 
     def test_zero_weights_replace_fallback(self):
-        df = pd.DataFrame({
-            "id": list(range(8)),
-            "size": [0, 0, 10, 20, 30, 40, 50, 60],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(8)),
+                "size": [0, 0, 10, 20, 30, 40, 50, 60],
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=True, fallback=True)
         assert len(result) == 5
         for _, row in result.iterrows():
             assert row["size"] > 0
 
     def test_zero_weights_without_replace_n_exceeds_valid(self):
-        df = pd.DataFrame({
-            "id": list(range(5)),
-            "size": [0, 0, 10, 20, 30],
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(5)),
+                "size": [0, 0, 10, 20, 30],
+            }
+        )
         with pytest.raises(ValueError, match="排除零权重后有效样本"):
             pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
 
@@ -335,7 +358,9 @@ class TestPPSFallbackBranches:
 
 class TestApplySampling:
     def test_random_method(self, sample_df):
-        rule = SamplingRule(method=SamplingMethod.RANDOM, mode=SampleSizeMode.PERCENTAGE, percentage=0.1)
+        rule = SamplingRule(
+            method=SamplingMethod.RANDOM, mode=SampleSizeMode.PERCENTAGE, percentage=0.1
+        )
         result = apply_sampling(sample_df, rule)
         assert len(result) == math.ceil(len(sample_df) * 0.1)
 
@@ -390,8 +415,12 @@ class TestApplySampling:
         assert result["id"].nunique() == 25
 
     def test_systematic_method(self, sample_df):
-        rule = SamplingRule(method=SamplingMethod.SYSTEMATIC, sample_size=30,
-                            mode=SampleSizeMode.FIXED, random_seed=0)
+        rule = SamplingRule(
+            method=SamplingMethod.SYSTEMATIC,
+            sample_size=30,
+            mode=SampleSizeMode.FIXED,
+            random_seed=0,
+        )
         result = apply_sampling(sample_df, rule)
         assert len(result) == 30
 
@@ -468,46 +497,56 @@ class TestLoadRuleFromConfig:
 
 class TestPPSExtremeRegression:
     def test_all_one_weights_replace(self):
-        df = pd.DataFrame({
-            "id": list(range(10)),
-            "size": [1] * 10,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(10)),
+                "size": [1] * 10,
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=True)
         assert len(result) == 5
 
     def test_all_one_weights_no_replace(self):
-        df = pd.DataFrame({
-            "id": list(range(10)),
-            "size": [1] * 10,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(10)),
+                "size": [1] * 10,
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=False)
         assert len(result) == 5
         assert result["id"].nunique() == 5
 
     def test_all_one_weights_no_replace_n_equals_population(self):
-        df = pd.DataFrame({
-            "id": list(range(5)),
-            "size": [1] * 5,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(5)),
+                "size": [1] * 5,
+            }
+        )
         result = pps_sample(df, 5, "size", seed=42, replace=False)
         assert len(result) == 5
         assert result["id"].nunique() == 5
         assert set(result["id"].tolist()) == {0, 1, 2, 3, 4}
 
     def test_all_one_weights_n_greater_than_population_clamped(self):
-        df = pd.DataFrame({
-            "id": list(range(3)),
-            "size": [1] * 3,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(3)),
+                "size": [1] * 3,
+            }
+        )
         result = pps_sample(df, 10, "size", seed=42, replace=False)
         assert len(result) == 3
         assert result["id"].nunique() == 3
 
     def test_all_one_weights_n_equals_one(self):
-        df = pd.DataFrame({
-            "id": list(range(100)),
-            "size": [1] * 100,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(100)),
+                "size": [1] * 100,
+            }
+        )
         result = pps_sample(df, 1, "size", seed=42, replace=False)
         assert len(result) == 1
         assert 0 <= result.iloc[0]["id"] < 100
@@ -535,10 +574,12 @@ class TestPPSExtremeRegression:
             pps_sample(df, 2, "size", seed=42, fallback=True)
 
     def test_all_one_weights_seed_reproducible(self):
-        df = pd.DataFrame({
-            "id": list(range(20)),
-            "size": [1] * 20,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(20)),
+                "size": [1] * 20,
+            }
+        )
         a = pps_sample(df, 8, "size", seed=99, replace=False)
         b = pps_sample(df, 8, "size", seed=99, replace=False)
         pd.testing.assert_frame_equal(a, b)
@@ -586,19 +627,25 @@ class TestPPSExtremeRegression:
             pps_sample(df, 1, "size", seed=42, fallback=False)
 
     def test_all_one_high_imbalance_threshold(self):
-        df = pd.DataFrame({
-            "id": list(range(10)),
-            "size": [1] * 10,
-        })
-        result = pps_sample(df, 3, "size", seed=42, replace=False, imbalance_threshold=0.1)
+        df = pd.DataFrame(
+            {
+                "id": list(range(10)),
+                "size": [1] * 10,
+            }
+        )
+        result = pps_sample(
+            df, 3, "size", seed=42, replace=False, imbalance_threshold=0.1
+        )
         assert len(result) == 3
         assert result["id"].nunique() == 3
 
     def test_apply_sampling_pps_all_one_weights(self):
-        df = pd.DataFrame({
-            "id": list(range(50)),
-            "w": [1] * 50,
-        })
+        df = pd.DataFrame(
+            {
+                "id": list(range(50)),
+                "w": [1] * 50,
+            }
+        )
         rule = SamplingRule(
             method=SamplingMethod.PPS,
             pps_size_col="w",

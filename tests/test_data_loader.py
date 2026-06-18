@@ -1,7 +1,5 @@
 """数据导入模块测试."""
 
-import os
-
 import pandas as pd
 import pytest
 import yaml
@@ -19,21 +17,25 @@ from qsp.data_loader import (
 @pytest.fixture
 def tmp_csv(tmp_path):
     p = tmp_path / "data.csv"
-    pd.DataFrame({
-        "id": [1, 2, 3, 4],
-        "batch_id": ["A", "A", "B", "B"],
-        "value": [10, 20, 30, 40],
-    }).to_csv(p, index=False, encoding="utf-8")
+    pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4],
+            "batch_id": ["A", "A", "B", "B"],
+            "value": [10, 20, 30, 40],
+        }
+    ).to_csv(p, index=False, encoding="utf-8")
     return str(p)
 
 
 @pytest.fixture
 def tmp_json(tmp_path):
     p = tmp_path / "data.json"
-    pd.DataFrame([
-        {"id": 1, "batch_id": "X", "value": 100},
-        {"id": 2, "batch_id": "Y", "value": 200},
-    ]).to_json(p, orient="records", force_ascii=False)
+    pd.DataFrame(
+        [
+            {"id": 1, "batch_id": "X", "value": 100},
+            {"id": 2, "batch_id": "Y", "value": 200},
+        ]
+    ).to_json(p, orient="records", force_ascii=False)
     return str(p)
 
 

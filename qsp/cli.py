@@ -5,17 +5,21 @@ from __future__ import annotations
 import json as _json
 import os
 import sys
-from typing import List, Optional
+from typing import Optional
 
 import click
-import pandas as pd
 import yaml
 
-from .data_loader import BatchDataset, load_batch_data, validate_dataset
+from .data_loader import load_batch_data, validate_dataset
 from .report import generate_report, report_to_text
 from .risk import analyze_risks, risks_to_text
-from .sampling import SamplingRule, SamplingMethod, SampleSizeMode, apply_sampling, load_rule_from_config
-
+from .sampling import (
+    SampleSizeMode,
+    SamplingMethod,
+    SamplingRule,
+    apply_sampling,
+    load_rule_from_config,
+)
 
 EXIT_OK = 0
 EXIT_GENERAL_ERROR = 1
@@ -79,9 +83,15 @@ def _load_rule(ctx, param, value) -> Optional[SamplingRule]:
 @cli.command()
 @click.argument("input_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--batch-col", "-b", default=None, help="批次列名")
-@click.option("--format", "fmt", default=None, help="强制指定格式 (csv/excel/json/yaml)")
-@click.option("--output", "-o", type=click.Path(), default=None, help="导出校验结果到 JSON")
-def inspect(input_path: str, batch_col: Optional[str], fmt: Optional[str], output: Optional[str]):
+@click.option(
+    "--format", "fmt", default=None, help="强制指定格式 (csv/excel/json/yaml)"
+)
+@click.option(
+    "--output", "-o", type=click.Path(), default=None, help="导出校验结果到 JSON"
+)
+def inspect(
+    input_path: str, batch_col: Optional[str], fmt: Optional[str], output: Optional[str]
+):
     """检查批次数据并输出基本信息."""
     try:
         ds = load_batch_data(input_path, batch_col=batch_col, fmt=fmt)
@@ -108,7 +118,9 @@ def inspect(input_path: str, batch_col: Optional[str], fmt: Optional[str], outpu
         click.echo(f"批次列: {ds.batch_col}  (共 {len(batches)} 个批次)")
         if batches:
             show = batches[:10]
-            click.echo(f"批次示例: {', '.join(show)}{' ...' if len(batches) > 10 else ''}")
+            click.echo(
+                f"批次示例: {', '.join(show)}{' ...' if len(batches) > 10 else ''}"
+            )
 
     issues = validate_dataset(ds, required_cols=None)
     click.echo("")
@@ -136,28 +148,50 @@ def inspect(input_path: str, batch_col: Optional[str], fmt: Optional[str], outpu
 @cli.command()
 @click.argument("input_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--rule-file", "-r", callback=_load_rule, help="抽样规则 YAML/JSON 文件")
-@click.option("--method", type=str, default=None,
-              help="抽样方法 (覆盖规则文件): random/simple/stratified/systematic/cluster/pps")
-@click.option("--mode", type=str, default=None,
-              help="样本量模式: fixed/percentage/statistical")
+@click.option(
+    "--method",
+    type=str,
+    default=None,
+    help="抽样方法 (覆盖规则文件): random/simple/stratified/systematic/cluster/pps",
+)
+@click.option(
+    "--mode", type=str, default=None, help="样本量模式: fixed/percentage/statistical"
+)
 @click.option("--sample-size", "-n", type=int, default=0, help="fixed 模式下样本量")
-@click.option("--percentage", "-p", type=float, default=0.0, help="percentage 模式下比例 0~1")
+@click.option(
+    "--percentage", "-p", type=float, default=0.0, help="percentage 模式下比例 0~1"
+)
 @click.option("--stratify-by", default=None, help="分层抽样列名")
 @click.option("--cluster-by", default=None, help="整群抽样列名")
 @click.option("--cluster-min-clusters", type=int, default=None, help="整群抽样最小群数")
 @click.option("--pps-size-col", default=None, help="PPS 抽样规模列名")
 @click.option("--pps-replace/--pps-no-replace", default=None, help="PPS 抽样是否有放回")
-@click.option("--pps-fallback/--pps-no-fallback", default=None,
-              help="PPS 极不均衡时是否自动回退 (默认开启)")
+@click.option(
+    "--pps-fallback/--pps-no-fallback",
+    default=None,
+    help="PPS 极不均衡时是否自动回退 (默认开启)",
+)
 @click.option("--batch-col", "-b", default=None, help="批次列名 (用于报告)")
-@click.option("--batches", "batch_filter", default=None, help="只处理指定批次，逗号分隔")
+@click.option(
+    "--batches", "batch_filter", default=None, help="只处理指定批次，逗号分隔"
+)
 @click.option("--dimensions", "-d", default=None, help="覆盖率报告维度，逗号分隔")
-@click.option("--output-sample", "-os", type=click.Path(), default=None, help="导出抽样结果 (CSV)")
-@click.option("--output-report", type=click.Path(), default=None, help="导出覆盖率报告 (JSON)")
-@click.option("--fail-on-critical/--no-fail-on-critical", default=True,
-              help="存在 CRITICAL 风险时返回非零退出码 (默认开启)")
-@click.option("--fail-on-high/--no-fail-on-high", default=False,
-              help="存在 HIGH 风险时返回非零退出码 (默认关闭)")
+@click.option(
+    "--output-sample", "-os", type=click.Path(), default=None, help="导出抽样结果 (CSV)"
+)
+@click.option(
+    "--output-report", type=click.Path(), default=None, help="导出覆盖率报告 (JSON)"
+)
+@click.option(
+    "--fail-on-critical/--no-fail-on-critical",
+    default=True,
+    help="存在 CRITICAL 风险时返回非零退出码 (默认开启)",
+)
+@click.option(
+    "--fail-on-high/--no-fail-on-high",
+    default=False,
+    help="存在 HIGH 风险时返回非零退出码 (默认关闭)",
+)
 @click.option("--seed", type=int, default=42, help="随机种子")
 @click.option("--quiet", "-q", is_flag=True, help="仅输出警告和错误")
 def plan(
@@ -299,7 +333,9 @@ def plan(
         sys.exit(EXIT_SAMPLING_ERROR)
 
     dim_list = [x.strip() for x in dimensions.split(",")] if dimensions else None
-    report = generate_report(population, sample, dimensions=dim_list, batch_col=effective_batch_col)
+    report = generate_report(
+        population, sample, dimensions=dim_list, batch_col=effective_batch_col
+    )
     risk = analyze_risks(population, sample, rule, report=report)
 
     if not quiet:
@@ -331,7 +367,8 @@ def plan(
                     "uncovered": report.batch_stats.uncovered,
                     "details": report.batch_stats.details,
                 }
-                if report.batch_stats else None
+                if report.batch_stats
+                else None
             ),
             "dimensions": {
                 dim: {
@@ -396,7 +433,9 @@ def example_rule(output_path: str, fmt: str):
     }
     with open(output_path, "w", encoding="utf-8") as f:
         if fmt == "yaml":
-            yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+            yaml.safe_dump(
+                cfg, f, allow_unicode=True, sort_keys=False, default_flow_style=False
+            )
         else:
             _json.dump(cfg, f, ensure_ascii=False, indent=2)
     click.echo(f"示例规则已生成: {output_path}")

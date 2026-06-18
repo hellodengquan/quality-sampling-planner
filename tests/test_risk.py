@@ -11,37 +11,43 @@ from qsp.risk import (
     analyze_risks,
     risks_to_text,
 )
-from qsp.sampling import SamplingMethod, SampleSizeMode, SamplingRule
+from qsp.sampling import SamplingMethod, SamplingRule
 
 
 @pytest.fixture
 def large_population():
     N = 1200
-    return pd.DataFrame({
-        "id": list(range(N)),
-        "batch": (["A"] * 300 + ["B"] * 300 + ["C"] * 300 + ["D"] * 300),
-        "line": (["L1"] * 150 + ["L2"] * 150) * 4,
-        "value": [i * 1.1 for i in range(N)],
-    })
+    return pd.DataFrame(
+        {
+            "id": list(range(N)),
+            "batch": (["A"] * 300 + ["B"] * 300 + ["C"] * 300 + ["D"] * 300),
+            "line": (["L1"] * 150 + ["L2"] * 150) * 4,
+            "value": [i * 1.1 for i in range(N)],
+        }
+    )
 
 
 class TestRiskDataStructures:
     def test_level_counts(self):
-        a = RiskAnalysis(alerts=[
-            RiskAlert(RiskLevel.CRITICAL, "a", "t", "d", "s"),
-            RiskAlert(RiskLevel.HIGH, "b", "t", "d", "s"),
-            RiskAlert(RiskLevel.HIGH, "c", "t", "d", "s"),
-        ])
+        a = RiskAnalysis(
+            alerts=[
+                RiskAlert(RiskLevel.CRITICAL, "a", "t", "d", "s"),
+                RiskAlert(RiskLevel.HIGH, "b", "t", "d", "s"),
+                RiskAlert(RiskLevel.HIGH, "c", "t", "d", "s"),
+            ]
+        )
         assert a.level_counts == {"LOW": 0, "MEDIUM": 0, "HIGH": 2, "CRITICAL": 1}
         assert a.has_critical
         assert a.has_high
 
     def test_by_level(self):
-        a = RiskAnalysis(alerts=[
-            RiskAlert(RiskLevel.LOW, "x", "t1", "d", "s"),
-            RiskAlert(RiskLevel.HIGH, "y", "t2", "d", "s"),
-            RiskAlert(RiskLevel.LOW, "z", "t3", "d", "s"),
-        ])
+        a = RiskAnalysis(
+            alerts=[
+                RiskAlert(RiskLevel.LOW, "x", "t1", "d", "s"),
+                RiskAlert(RiskLevel.HIGH, "y", "t2", "d", "s"),
+                RiskAlert(RiskLevel.LOW, "z", "t3", "d", "s"),
+            ]
+        )
         assert len(a.by_level(RiskLevel.LOW)) == 2
         assert len(a.by_level(RiskLevel.MEDIUM)) == 0
 
@@ -73,7 +79,9 @@ class TestSampleSizeChecks:
 
 class TestCoverageChecks:
     def test_bad_batch_coverage(self, large_population):
-        sample = large_population[large_population["batch"] == "A"].sample(30, random_state=0)
+        sample = large_population[large_population["batch"] == "A"].sample(
+            30, random_state=0
+        )
         rule = SamplingRule()
         report = generate_report(large_population, sample, batch_col="batch")
         analysis = analyze_risks(large_population, sample, rule, report=report)
@@ -83,7 +91,11 @@ class TestCoverageChecks:
     def test_small_per_batch(self, large_population):
         batches = []
         for b in ["A", "B", "C", "D"]:
-            batches.append(large_population[large_population["batch"] == b].sample(1, random_state=0))
+            batches.append(
+                large_population[large_population["batch"] == b].sample(
+                    1, random_state=0
+                )
+            )
         sample = pd.concat(batches, ignore_index=True)
         rule = SamplingRule()
         report = generate_report(large_population, sample, batch_col="batch")
@@ -109,10 +121,12 @@ class TestMethodChecks:
         assert any("周期性风险" in a.title for a in analysis.alerts)
 
     def test_stratified_sparse_dimension(self):
-        pop = pd.DataFrame({
-            "id": list(range(50)),
-            "unique_tag": ["tag_" + str(i) for i in range(50)],
-        })
+        pop = pd.DataFrame(
+            {
+                "id": list(range(50)),
+                "unique_tag": ["tag_" + str(i) for i in range(50)],
+            }
+        )
         sample = pop.sample(20, random_state=0)
         rule = SamplingRule(method=SamplingMethod.STRATIFIED, stratify_by="unique_tag")
         analysis = analyze_risks(pop, sample, rule)
@@ -121,7 +135,9 @@ class TestMethodChecks:
 
 class TestRiskTextOutput:
     def test_risks_to_text(self, large_population):
-        sample = large_population[large_population["batch"] == "A"].sample(5, random_state=0)
+        sample = large_population[large_population["batch"] == "A"].sample(
+            5, random_state=0
+        )
         rule = SamplingRule()
         report = generate_report(large_population, sample, batch_col="batch")
         analysis = analyze_risks(large_population, sample, rule, report=report)
@@ -142,11 +158,16 @@ class TestRiskTextOutput:
 
 class TestThresholds:
     def test_custom_thresholds(self, large_population):
-        sample = large_population[large_population["batch"].isin(["A", "B"])].sample(50, random_state=0)
+        sample = large_population[large_population["batch"].isin(["A", "B"])].sample(
+            50, random_state=0
+        )
         rule = SamplingRule()
         report = generate_report(large_population, sample, batch_col="batch")
         analysis = analyze_risks(
-            large_population, sample, rule, report=report,
+            large_population,
+            sample,
+            rule,
+            report=report,
             thresholds={"min_batch_coverage": 0.3},
         )
         titles = [a.title for a in analysis.alerts]

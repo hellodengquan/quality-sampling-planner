@@ -11,6 +11,7 @@ import pandas as pd
 @dataclass
 class CoverageStats:
     """单维度覆盖率统计."""
+
     dimension: str
     total_categories: int
     covered_categories: int
@@ -22,6 +23,7 @@ class CoverageStats:
 @dataclass
 class CoverageReport:
     """完整覆盖率报告."""
+
     population_size: int
     sample_size: int
     overall_rate: float
@@ -63,7 +65,11 @@ def compute_dimension_coverage(
     details: Dict[str, Dict[str, int]] = {}
     for cat in sorted(pop_cats):
         pop_cnt = int((population[dimension].astype(str) == cat).sum())
-        sam_cnt = int((sample[dimension].astype(str) == cat).sum()) if dimension in sample.columns else 0
+        sam_cnt = (
+            int((sample[dimension].astype(str) == cat).sum())
+            if dimension in sample.columns
+            else 0
+        )
         details[cat] = {"population": pop_cnt, "sample": sam_cnt}
 
     return CoverageStats(
@@ -90,36 +96,44 @@ def compute_numerical_summary(
         if col not in population.columns:
             continue
         pop_series = population[col].dropna()
-        sam_series = sample[col].dropna() if col in sample.columns else pd.Series(dtype="float64")
+        sam_series = (
+            sample[col].dropna()
+            if col in sample.columns
+            else pd.Series(dtype="float64")
+        )
 
         for tag, s in (("population", pop_series), ("sample", sam_series)):
             if len(s) == 0:
-                rows.append({
-                    "column": col,
-                    "source": tag,
-                    "count": 0,
-                    "mean": None,
-                    "std": None,
-                    "min": None,
-                    "p25": None,
-                    "median": None,
-                    "p75": None,
-                    "max": None,
-                })
+                rows.append(
+                    {
+                        "column": col,
+                        "source": tag,
+                        "count": 0,
+                        "mean": None,
+                        "std": None,
+                        "min": None,
+                        "p25": None,
+                        "median": None,
+                        "p75": None,
+                        "max": None,
+                    }
+                )
                 continue
             desc = s.describe(percentiles=[0.25, 0.5, 0.75])
-            rows.append({
-                "column": col,
-                "source": tag,
-                "count": int(desc.get("count", 0)),
-                "mean": float(desc.get("mean", 0)),
-                "std": float(desc.get("std", 0)),
-                "min": float(desc.get("min", 0)),
-                "p25": float(desc.get("25%", 0)),
-                "median": float(desc.get("50%", 0)),
-                "p75": float(desc.get("75%", 0)),
-                "max": float(desc.get("max", 0)),
-            })
+            rows.append(
+                {
+                    "column": col,
+                    "source": tag,
+                    "count": int(desc.get("count", 0)),
+                    "mean": float(desc.get("mean", 0)),
+                    "std": float(desc.get("std", 0)),
+                    "min": float(desc.get("min", 0)),
+                    "p25": float(desc.get("25%", 0)),
+                    "median": float(desc.get("50%", 0)),
+                    "p75": float(desc.get("75%", 0)),
+                    "max": float(desc.get("max", 0)),
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -181,7 +195,9 @@ def report_to_text(report: CoverageReport) -> str:
     if report.batch_stats:
         bs = report.batch_stats
         lines.append(f"--- 批次维度: {bs.dimension} ---")
-        lines.append(f"总批次数: {bs.total_categories}  已覆盖: {bs.covered_categories}  覆盖率: {bs.coverage_rate * 100:.2f}%")
+        lines.append(
+            f"总批次数: {bs.total_categories}  已覆盖: {bs.covered_categories}  覆盖率: {bs.coverage_rate * 100:.2f}%"
+        )
         if bs.uncovered:
             lines.append(f"未覆盖批次: {', '.join(bs.uncovered)}")
         lines.append("批次详情:")
@@ -195,7 +211,9 @@ def report_to_text(report: CoverageReport) -> str:
     if report.dimension_stats:
         for dim, ds in report.dimension_stats.items():
             lines.append(f"--- 维度: {dim} ---")
-            lines.append(f"类别总数: {ds.total_categories}  已覆盖: {ds.covered_categories}  覆盖率: {ds.coverage_rate * 100:.2f}%")
+            lines.append(
+                f"类别总数: {ds.total_categories}  已覆盖: {ds.covered_categories}  覆盖率: {ds.coverage_rate * 100:.2f}%"
+            )
             if ds.uncovered:
                 lines.append(f"未覆盖类别: {', '.join(ds.uncovered)}")
             lines.append("")

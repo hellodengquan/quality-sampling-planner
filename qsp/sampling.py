@@ -13,6 +13,7 @@ import pandas as pd
 
 class SamplingMethod(str, Enum):
     """抽样方法枚举."""
+
     RANDOM = "random"
     STRATIFIED = "stratified"
     SYSTEMATIC = "systematic"
@@ -23,6 +24,7 @@ class SamplingMethod(str, Enum):
 
 class SampleSizeMode(str, Enum):
     """样本量计算模式."""
+
     FIXED = "fixed"
     PERCENTAGE = "percentage"
     STATISTICAL = "statistical"
@@ -31,6 +33,7 @@ class SampleSizeMode(str, Enum):
 @dataclass
 class SamplingRule:
     """抽样规则配置."""
+
     method: SamplingMethod = SamplingMethod.RANDOM
     mode: SampleSizeMode = SampleSizeMode.PERCENTAGE
     sample_size: int = 0
@@ -66,7 +69,7 @@ def calculate_statistical_sample_size(
     p = expected_defect_rate
     e = margin_of_error
 
-    n_0 = (z ** 2 * p * (1 - p)) / (e ** 2)
+    n_0 = (z**2 * p * (1 - p)) / (e**2)
 
     if population_size > 0:
         n = n_0 / (1 + (n_0 - 1) / population_size)
@@ -92,12 +95,16 @@ def determine_sample_size(population: int, rule: SamplingRule) -> int:
     return max(1, min(size, population))
 
 
-def simple_random_sample(df: pd.DataFrame, n: int, seed: Optional[int] = None) -> pd.DataFrame:
+def simple_random_sample(
+    df: pd.DataFrame, n: int, seed: Optional[int] = None
+) -> pd.DataFrame:
     """简单随机抽样."""
     return df.sample(n=n, random_state=seed)
 
 
-def systematic_sample(df: pd.DataFrame, n: int, seed: Optional[int] = None) -> pd.DataFrame:
+def systematic_sample(
+    df: pd.DataFrame, n: int, seed: Optional[int] = None
+) -> pd.DataFrame:
     """系统抽样（等距抽样）."""
     n_total = len(df)
     if n >= n_total:
@@ -238,7 +245,9 @@ def cluster_sample(
                     extra = min(remain, len(full_part) - len(current_part))
                     leftover = full_part.drop(current_part.index)
                     add = leftover.sample(n=extra, random_state=seed)
-                    parts[current_idx] = pd.concat([current_part, add], ignore_index=True)
+                    parts[current_idx] = pd.concat(
+                        [current_part, add], ignore_index=True
+                    )
                     remain -= extra
         result = pd.concat(parts, ignore_index=True)
 
@@ -248,8 +257,14 @@ def cluster_sample(
 class PPSSkewWarning:
     """PPS 极不均衡回退警告."""
 
-    def __init__(self, reason: str, fallback: str, n_imbalanced: int,
-                 n_total: int, threshold: float):
+    def __init__(
+        self,
+        reason: str,
+        fallback: str,
+        n_imbalanced: int,
+        n_total: int,
+        threshold: float,
+    ):
         self.reason = reason
         self.fallback = fallback
         self.n_imbalanced = n_imbalanced
@@ -275,15 +290,20 @@ def _detect_pps_skew(
 
     if n_zero > 0 and total <= 0:
         return PPSSkewWarning(
-            reason="all_zero", fallback="none",
-            n_imbalanced=n_zero, n_total=len(sizes), threshold=threshold,
+            reason="all_zero",
+            fallback="none",
+            n_imbalanced=n_zero,
+            n_total=len(sizes),
+            threshold=threshold,
         )
 
     if n_zero > 0:
         return PPSSkewWarning(
             reason="has_zero_weights",
             fallback="exclude_zero_then_pps",
-            n_imbalanced=n_zero, n_total=len(sizes), threshold=threshold,
+            n_imbalanced=n_zero,
+            n_total=len(sizes),
+            threshold=threshold,
         )
 
     if total <= 0:
@@ -296,7 +316,9 @@ def _detect_pps_skew(
         return PPSSkewWarning(
             reason="single_dominant_weight",
             fallback="cap_and_redistribute",
-            n_imbalanced=1, n_total=len(sizes), threshold=threshold,
+            n_imbalanced=1,
+            n_total=len(sizes),
+            threshold=threshold,
         )
 
     n_below = int((probs < threshold).sum())
@@ -304,7 +326,9 @@ def _detect_pps_skew(
         return PPSSkewWarning(
             reason="too_many_tiny_weights",
             fallback="blend_equal_and_pps",
-            n_imbalanced=n_below, n_total=len(sizes), threshold=threshold,
+            n_imbalanced=n_below,
+            n_total=len(sizes),
+            threshold=threshold,
         )
 
     return None
@@ -349,9 +373,7 @@ def pps_sample(
     skew = _detect_pps_skew(sizes, n, threshold=imbalance_threshold)
 
     if skew is not None and skew.reason == "all_zero":
-        raise ValueError(
-            f"规模列 '{size_col}' 全部为零，无有效样本可做 PPS 抽样"
-        )
+        raise ValueError(f"规模列 '{size_col}' 全部为零，无有效样本可做 PPS 抽样")
 
     total = sizes.sum()
     if total <= 0:
@@ -413,7 +435,9 @@ def _pps_core(
             if total_w <= 0:
                 break
             normalized = [p / total_w for p in remaining_probs]
-            idx_in_remain = rng.choices(range(len(remaining)), weights=normalized, k=1)[0]
+            idx_in_remain = rng.choices(range(len(remaining)), weights=normalized, k=1)[
+                0
+            ]
             selected.append(remaining[idx_in_remain])
             remaining.pop(idx_in_remain)
             remaining_probs.pop(idx_in_remain)
@@ -438,7 +462,9 @@ def _pps_blend_equal_and_weighted(
 
     if replace:
         equal_indices = rng.choices(range(len(df)), k=n_equal)
-        weighted_indices = rng.choices(range(len(df)), weights=(sizes / total).tolist(), k=n_weighted)
+        weighted_indices = rng.choices(
+            range(len(df)), weights=(sizes / total).tolist(), k=n_weighted
+        )
         all_indices = equal_indices + weighted_indices
         rng.shuffle(all_indices)
         result = df.iloc[all_indices].reset_index(drop=True)
@@ -563,17 +589,27 @@ def apply_sampling(df: pd.DataFrame, rule: SamplingRule) -> pd.DataFrame:
         if not rule.stratify_by:
             raise ValueError("分层抽样需要指定 stratify_by 参数")
         return stratified_sample(
-            df, n, rule.stratify_by, rule.random_seed, rule.min_per_group, rule.weights or None
+            df,
+            n,
+            rule.stratify_by,
+            rule.random_seed,
+            rule.min_per_group,
+            rule.weights or None,
         )
     elif rule.method == SamplingMethod.CLUSTER:
         if not rule.cluster_by:
             raise ValueError("整群抽样需要指定 cluster_by 参数")
-        return cluster_sample(df, n, rule.cluster_by, rule.random_seed, rule.cluster_min_clusters)
+        return cluster_sample(
+            df, n, rule.cluster_by, rule.random_seed, rule.cluster_min_clusters
+        )
     elif rule.method == SamplingMethod.PPS:
         if not rule.pps_size_col:
             raise ValueError("PPS 抽样需要指定 pps_size_col 参数 (规模列)")
         return pps_sample(
-            df, n, rule.pps_size_col, rule.random_seed,
+            df,
+            n,
+            rule.pps_size_col,
+            rule.random_seed,
             replace=rule.pps_replace,
             imbalance_threshold=rule.pps_imbalance_threshold,
             fallback=rule.pps_fallback,

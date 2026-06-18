@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import yaml
@@ -13,6 +13,7 @@ import yaml
 @dataclass
 class BatchDataset:
     """批次数据集."""
+
     df: pd.DataFrame
     source: str
     batch_col: Optional[str] = None
@@ -29,7 +30,9 @@ class BatchDataset:
     def get_batches(self) -> List[str]:
         """获取所有批次标识列表."""
         if self.batch_col and self.batch_col in self.df.columns:
-            return sorted(self.df[self.batch_col].dropna().astype(str).unique().tolist())
+            return sorted(
+                self.df[self.batch_col].dropna().astype(str).unique().tolist()
+            )
         return []
 
     def filter_by_batch(self, batch_ids: Optional[List[str]] = None) -> pd.DataFrame:
@@ -125,7 +128,9 @@ def load_batch_data(
     return BatchDataset(df=df, source=path, batch_col=batch_col, meta=meta)
 
 
-def validate_dataset(ds: BatchDataset, required_cols: Optional[List[str]] = None) -> List[str]:
+def validate_dataset(
+    ds: BatchDataset, required_cols: Optional[List[str]] = None
+) -> List[str]:
     """校验数据集，返回问题列表."""
     issues: List[str] = []
     if ds.rows == 0:
