@@ -136,10 +136,10 @@ def inspect(input_path: str, batch_col: Optional[str], fmt: Optional[str], outpu
 @cli.command()
 @click.argument("input_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--rule-file", "-r", callback=_load_rule, help="抽样规则 YAML/JSON 文件")
-@click.option("--method", type=click.Choice(["random", "simple", "stratified", "systematic", "cluster", "pps"]),
-              default=None, help="抽样方法 (覆盖规则文件)")
-@click.option("--mode", type=click.Choice(["fixed", "percentage", "statistical"]),
-              default=None, help="样本量模式")
+@click.option("--method", type=str, default=None,
+              help="抽样方法 (覆盖规则文件): random/simple/stratified/systematic/cluster/pps")
+@click.option("--mode", type=str, default=None,
+              help="样本量模式: fixed/percentage/statistical")
 @click.option("--sample-size", "-n", type=int, default=0, help="fixed 模式下样本量")
 @click.option("--percentage", "-p", type=float, default=0.0, help="percentage 模式下比例 0~1")
 @click.option("--stratify-by", default=None, help="分层抽样列名")

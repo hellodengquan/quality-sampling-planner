@@ -306,7 +306,7 @@ class TestPPSFallbackBranches:
             "size": [9999, 1, 1, 1, 1],
         })
         result = pps_sample(df, 8, "size", seed=42, replace=True, fallback=True)
-        assert len(result) == 5
+        assert len(result) == 8
 
     def test_zero_weights_replace_fallback(self):
         df = pd.DataFrame({
@@ -464,3 +464,148 @@ class TestLoadRuleFromConfig:
         cfg = {"method": "pps", "pps_size_col": "w"}
         rule = load_rule_from_config(cfg)
         assert rule.pps_replace is True
+
+
+class TestPPSExtremeRegression:
+    def test_all_one_weights_replace(self):
+        df = pd.DataFrame({
+            "id": list(range(10)),
+            "size": [1] * 10,
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=True)
+        assert len(result) == 5
+
+    def test_all_one_weights_no_replace(self):
+        df = pd.DataFrame({
+            "id": list(range(10)),
+            "size": [1] * 10,
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=False)
+        assert len(result) == 5
+        assert result["id"].nunique() == 5
+
+    def test_all_one_weights_no_replace_n_equals_population(self):
+        df = pd.DataFrame({
+            "id": list(range(5)),
+            "size": [1] * 5,
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=False)
+        assert len(result) == 5
+        assert result["id"].nunique() == 5
+        assert set(result["id"].tolist()) == {0, 1, 2, 3, 4}
+
+    def test_all_one_weights_n_greater_than_population_clamped(self):
+        df = pd.DataFrame({
+            "id": list(range(3)),
+            "size": [1] * 3,
+        })
+        result = pps_sample(df, 10, "size", seed=42, replace=False)
+        assert len(result) == 3
+        assert result["id"].nunique() == 3
+
+    def test_all_one_weights_n_equals_one(self):
+        df = pd.DataFrame({
+            "id": list(range(100)),
+            "size": [1] * 100,
+        })
+        result = pps_sample(df, 1, "size", seed=42, replace=False)
+        assert len(result) == 1
+        assert 0 <= result.iloc[0]["id"] < 100
+
+    def test_all_zero_single_sample_raises(self):
+        df = pd.DataFrame({"id": [1], "size": [0]})
+        with pytest.raises(ValueError, match="全部为零"):
+            pps_sample(df, 1, "size", seed=42)
+
+    def test_single_sample_nonzero(self):
+        df = pd.DataFrame({"id": [1], "size": [100]})
+        result = pps_sample(df, 1, "size", seed=42, replace=False)
+        assert len(result) == 1
+        assert result.iloc[0]["id"] == 1
+
+    def test_single_sample_replace_many(self):
+        df = pd.DataFrame({"id": [1], "size": [100]})
+        result = pps_sample(df, 5, "size", seed=42, replace=True)
+        assert len(result) == 5
+        assert (result["id"] == 1).all()
+
+    def test_all_zero_fallback_true_raises(self):
+        df = pd.DataFrame({"id": [1, 2, 3], "size": [0, 0, 0]})
+        with pytest.raises(ValueError, match="全部为零"):
+            pps_sample(df, 2, "size", seed=42, fallback=True)
+
+    def test_all_one_weights_seed_reproducible(self):
+        df = pd.DataFrame({
+            "id": list(range(20)),
+            "size": [1] * 20,
+        })
+        a = pps_sample(df, 8, "size", seed=99, replace=False)
+        b = pps_sample(df, 8, "size", seed=99, replace=False)
+        pd.testing.assert_frame_equal(a, b)
+
+    def test_all_one_weights_should_not_trigger_skew(self):
+        sizes = pd.Series([1] * 5)
+        warn = _detect_pps_skew(sizes, 3, threshold=0.001)
+        assert warn is None
+
+    def test_all_one_weights_with_threshold_below_one(self):
+        sizes = pd.Series([1] * 5)
+        warn = _detect_pps_skew(sizes, 3, threshold=0.1)
+        assert warn is None
+
+    def test_nearly_equal_weights_no_skew(self):
+        sizes = pd.Series([1, 1.1, 1.2, 0.9, 1.0])
+        warn = _detect_pps_skew(sizes, 3)
+        assert warn is None
+
+    def test_weight_nan_raises(self):
+        df = pd.DataFrame({"id": [1, 2, 3], "size": [1, None, 3]})
+        with pytest.raises(ValueError, match="非数值或空值"):
+            pps_sample(df, 2, "size")
+
+    def test_weight_non_numeric_string_raises(self):
+        df = pd.DataFrame({"id": [1, 2, 3], "size": [1, "abc", 3]})
+        with pytest.raises(ValueError, match="非数值或空值"):
+            pps_sample(df, 2, "size")
+
+    def test_weight_zero_but_only_one_positive(self):
+        df = pd.DataFrame({"id": [1, 2, 3, 4], "size": [0, 0, 0, 100]})
+        result = pps_sample(df, 1, "size", seed=42, replace=False, fallback=True)
+        assert len(result) == 1
+        assert result.iloc[0]["id"] == 4
+
+    def test_weight_zero_but_only_one_positive_replace(self):
+        df = pd.DataFrame({"id": [1, 2, 3], "size": [0, 0, 100]})
+        result = pps_sample(df, 5, "size", seed=42, replace=True, fallback=True)
+        assert len(result) == 5
+        assert (result["id"] == 3).all()
+
+    def test_weight_zero_no_fallback_raises(self):
+        df = pd.DataFrame({"id": [1, 2, 3, 4], "size": [0, 0, 0, 100]})
+        with pytest.raises(ValueError, match="极不均衡"):
+            pps_sample(df, 1, "size", seed=42, fallback=False)
+
+    def test_all_one_high_imbalance_threshold(self):
+        df = pd.DataFrame({
+            "id": list(range(10)),
+            "size": [1] * 10,
+        })
+        result = pps_sample(df, 3, "size", seed=42, replace=False, imbalance_threshold=0.1)
+        assert len(result) == 3
+        assert result["id"].nunique() == 3
+
+    def test_apply_sampling_pps_all_one_weights(self):
+        df = pd.DataFrame({
+            "id": list(range(50)),
+            "w": [1] * 50,
+        })
+        rule = SamplingRule(
+            method=SamplingMethod.PPS,
+            pps_size_col="w",
+            pps_replace=False,
+            sample_size=10,
+            mode=SampleSizeMode.FIXED,
+        )
+        result = apply_sampling(df, rule)
+        assert len(result) == 10
+        assert result["id"].nunique() == 10

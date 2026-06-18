@@ -343,7 +343,7 @@ def pps_sample(
 
     if n <= 0:
         raise ValueError("样本量 n 必须为正整数")
-    if n > len(df):
+    if not replace and n > len(df):
         n = len(df)
 
     skew = _detect_pps_skew(sizes, n, threshold=imbalance_threshold)

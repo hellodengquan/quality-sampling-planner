@@ -367,3 +367,283 @@ class TestDataMissingColExitCode:
             "-q",
         ])
         assert result.exit_code == EXIT_DATA_MISSING_COL
+
+
+class TestCLIExitCodeStderrMapping:
+    @pytest.fixture
+    def bad_csv(self, tmp_path):
+        p = tmp_path / "bad.csv"
+        p.write_text("col1,col2\nnot_enough_cols\n")
+        return str(p)
+
+    @pytest.fixture
+    def skew_csv(self, tmp_path):
+        p = tmp_path / "skew.csv"
+        pd.DataFrame({
+            "id": list(range(6)),
+            "batch_id": ["A"] * 3 + ["B"] * 3,
+            "size": [0, 0, 10, 20, 30, 40],
+        }).to_csv(p, index=False)
+        return str(p)
+
+    @pytest.fixture
+    def dominant_csv(self, tmp_path):
+        p = tmp_path / "dominant.csv"
+        pd.DataFrame({
+            "id": list(range(5)),
+            "size": [10000, 1, 1, 1, 1],
+        }).to_csv(p, index=False)
+        return str(p)
+
+    def _assert_error_prefix(self, output: str):
+        assert "[ERROR]" in output, f"输出不包含 [ERROR] 前缀: {output}"
+
+    def _assert_stderr_contains(self, result, snippet: str):
+        combined = (result.stderr or "") + (result.output or "")
+        assert snippet in combined, f"输出不包含 '{snippet}': {combined}"
+
+    def test_config_missing_stratify_exits_7(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "stratified",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "需要指定")
+
+    def test_config_missing_cluster_exits_7(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "cluster",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "cluster_by")
+
+    def test_config_missing_pps_exits_7(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "pps",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "pps_size_col")
+
+    def test_rule_file_not_exists_exits_7(self, runner, sample_csv, tmp_path):
+        rule_p = str(tmp_path / "no_such.yaml")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", rule_p,
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "配置缺失")
+
+    def test_rule_file_bad_format_exits_8(self, runner, sample_csv, tmp_path):
+        rule_p = tmp_path / "bad.txt"
+        rule_p.write_text("not yaml")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", str(rule_p),
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "规则非法")
+
+    def test_rule_file_invalid_method_exits_8(self, runner, sample_csv, tmp_path):
+        rule_p = tmp_path / "bad.yaml"
+        rule_p.write_text("method: invalid_method_xyz\nmode: fixed\n")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", str(rule_p),
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "规则非法")
+
+    def test_cli_invalid_method_exits_8(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "invalid_method_xyz",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "非法抽样方法")
+
+    def test_cli_invalid_mode_exits_8(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--mode", "invalid_mode_xyz",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "非法样本量模式")
+
+    def test_pps_zero_weights_no_fallback_exits_8(self, runner, skew_csv):
+        result = runner.invoke(cli, [
+            "plan", skew_csv,
+            "--method", "pps",
+            "--pps-size-col", "size",
+            "--pps-no-fallback",
+            "-n", "3",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "规则无法执行")
+        self._assert_stderr_contains(result, "极不均衡")
+
+    def test_pps_dominant_no_fallback_exits_8(self, runner, dominant_csv):
+        result = runner.invoke(cli, [
+            "plan", dominant_csv,
+            "--method", "pps",
+            "--pps-size-col", "size",
+            "--pps-no-fallback",
+            "-n", "4",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "极不均衡")
+
+    def test_data_missing_stratify_col_exits_9(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "stratified",
+            "--stratify-by", "no_such_col",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "缺少必需列")
+
+    def test_data_missing_cluster_col_exits_9(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "cluster",
+            "--cluster-by", "no_such_col",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+        self._assert_stderr_contains(result, "缺少必需列")
+
+    def test_data_missing_pps_col_exits_9(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "pps",
+            "--pps-size-col", "no_such_col",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+        self._assert_stderr_contains(result, "缺少必需列")
+
+    def test_data_missing_batch_col_exits_9(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-b", "no_such_col",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+        self._assert_stderr_contains(result, "缺少必需列")
+
+    def test_data_error_empty_batch_filter_exits_5(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-b", "batch_id",
+            "--batches", "NOT_EXIST",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_ERROR
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "批次过滤后无数据")
+
+    def test_pps_fallback_works_ok(self, runner, skew_csv):
+        result = runner.invoke(cli, [
+            "plan", skew_csv,
+            "--method", "pps",
+            "--pps-size-col", "size",
+            "--pps-fallback",
+            "-n", "3",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_OK
+
+    def test_critical_risk_exits_3(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-b", "batch_id",
+            "-n", "1",
+            "--mode", "fixed",
+            "--fail-on-critical",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RISK_CRITICAL
+
+    def test_no_fail_on_critical_exits_0(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-b", "batch_id",
+            "-n", "1",
+            "--mode", "fixed",
+            "--no-fail-on-critical",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_OK
+
+    def test_missing_required_col_error_message_has_column_name(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "stratified",
+            "--stratify-by", "my_magic_col",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+        combined = (result.stderr or "") + (result.output or "")
+        assert "my_magic_col" in combined
+
+    def test_rule_file_yaml_parse_error(self, runner, sample_csv, tmp_path):
+        rule_p = tmp_path / "broken.yaml"
+        rule_p.write_text("method: stratified\n  invalid: [unclosed\n")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", str(rule_p),
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+        self._assert_error_prefix(result.output + (result.stderr or ""))
+        self._assert_stderr_contains(result, "规则非法")
+
+    def test_all_exit_codes_are_non_zero_except_ok(self):
+        non_zero = {
+            EXIT_GENERAL_ERROR,
+            EXIT_SAMPLING_ERROR,
+            EXIT_RISK_CRITICAL,
+            EXIT_RISK_HIGH,
+            EXIT_DATA_ERROR,
+            EXIT_IO_ERROR,
+            EXIT_CONFIG_MISSING,
+            EXIT_RULE_INVALID,
+            EXIT_DATA_MISSING_COL,
+        }
+        for code in non_zero:
+            assert code != 0
+
+    def test_exit_code_values_distinct_and_in_range(self):
+        all_codes = sorted([
+            EXIT_OK, EXIT_GENERAL_ERROR, EXIT_SAMPLING_ERROR,
+            EXIT_RISK_CRITICAL, EXIT_RISK_HIGH, EXIT_DATA_ERROR,
+            EXIT_IO_ERROR, EXIT_CONFIG_MISSING, EXIT_RULE_INVALID,
+            EXIT_DATA_MISSING_COL,
+        ])
+        assert all_codes == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
