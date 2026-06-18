@@ -14,7 +14,7 @@ import yaml
 from .data_loader import BatchDataset, load_batch_data, validate_dataset
 from .report import generate_report, report_to_text
 from .risk import analyze_risks, risks_to_text
-from .sampling import SamplingRule, apply_sampling, load_rule_from_config
+from .sampling import SamplingRule, SamplingMethod, SampleSizeMode, apply_sampling, load_rule_from_config
 
 
 EXIT_OK = 0
@@ -24,6 +24,9 @@ EXIT_RISK_CRITICAL = 3
 EXIT_RISK_HIGH = 4
 EXIT_DATA_ERROR = 5
 EXIT_IO_ERROR = 6
+EXIT_CONFIG_MISSING = 7
+EXIT_RULE_INVALID = 8
+EXIT_DATA_MISSING_COL = 9
 
 
 @click.group()
@@ -33,20 +36,44 @@ def cli():
     pass
 
 
+class ConfigMissingError(Exception):
+    pass
+
+
+class RuleInvalidError(Exception):
+    pass
+
+
+class DataMissingColumnError(Exception):
+    pass
+
+
 def _load_rule(ctx, param, value) -> Optional[SamplingRule]:
     if not value:
         return None
     if not os.path.exists(value):
-        raise click.BadParameter(f"规则文件不存在: {value}")
+        ctx.meta["rule_load_error"] = ConfigMissingError(f"规则文件不存在: {value}")
+        return None
     ext = os.path.splitext(value)[1].lower().lstrip(".")
-    with open(value, "r", encoding="utf-8") as f:
-        if ext in ("yaml", "yml"):
-            cfg = yaml.safe_load(f) or {}
-        elif ext == "json":
-            cfg = _json.load(f) or {}
-        else:
-            raise click.BadParameter("规则文件仅支持 .yaml/.yml/.json")
-    return load_rule_from_config(cfg)
+    try:
+        with open(value, "r", encoding="utf-8") as f:
+            if ext in ("yaml", "yml"):
+                cfg = yaml.safe_load(f) or {}
+            elif ext == "json":
+                cfg = _json.load(f) or {}
+            else:
+                ctx.meta["rule_load_error"] = RuleInvalidError(
+                    f"规则文件仅支持 .yaml/.yml/.json，收到 .{ext}"
+                )
+                return None
+    except Exception as e:
+        ctx.meta["rule_load_error"] = RuleInvalidError(f"规则文件解析失败: {e}")
+        return None
+    try:
+        return load_rule_from_config(cfg)
+    except (ValueError, KeyError) as e:
+        ctx.meta["rule_load_error"] = RuleInvalidError(f"规则配置非法: {e}")
+        return None
 
 
 @cli.command()
@@ -120,6 +147,8 @@ def inspect(input_path: str, batch_col: Optional[str], fmt: Optional[str], outpu
 @click.option("--cluster-min-clusters", type=int, default=None, help="整群抽样最小群数")
 @click.option("--pps-size-col", default=None, help="PPS 抽样规模列名")
 @click.option("--pps-replace/--pps-no-replace", default=None, help="PPS 抽样是否有放回")
+@click.option("--pps-fallback/--pps-no-fallback", default=None,
+              help="PPS 极不均衡时是否自动回退 (默认开启)")
 @click.option("--batch-col", "-b", default=None, help="批次列名 (用于报告)")
 @click.option("--batches", "batch_filter", default=None, help="只处理指定批次，逗号分隔")
 @click.option("--dimensions", "-d", default=None, help="覆盖率报告维度，逗号分隔")
@@ -143,6 +172,7 @@ def plan(
     cluster_min_clusters: Optional[int],
     pps_size_col: Optional[str],
     pps_replace: Optional[bool],
+    pps_fallback: Optional[bool],
     batch_col: Optional[str],
     batch_filter: Optional[str],
     dimensions: Optional[str],
@@ -174,14 +204,37 @@ def plan(
         for i in issues:
             click.echo(f"       {i}")
 
-    rule = rule_file or SamplingRule()
+    rule_load_error = click.get_current_context().meta.get("rule_load_error")
+    if rule_load_error is not None:
+        if isinstance(rule_load_error, ConfigMissingError):
+            click.echo(f"[ERROR] 配置缺失: {rule_load_error}", err=True)
+            sys.exit(EXIT_CONFIG_MISSING)
+        elif isinstance(rule_load_error, RuleInvalidError):
+            click.echo(f"[ERROR] 规则非法: {rule_load_error}", err=True)
+            sys.exit(EXIT_RULE_INVALID)
+
+    try:
+        rule = rule_file or SamplingRule()
+    except ConfigMissingError as e:
+        click.echo(f"[ERROR] 配置缺失: {e}", err=True)
+        sys.exit(EXIT_CONFIG_MISSING)
+    except RuleInvalidError as e:
+        click.echo(f"[ERROR] 规则非法: {e}", err=True)
+        sys.exit(EXIT_RULE_INVALID)
+
     rule.random_seed = seed
     if method:
-        from .sampling import SamplingMethod
-        rule.method = SamplingMethod(method)
+        try:
+            rule.method = SamplingMethod(method)
+        except ValueError as e:
+            click.echo(f"[ERROR] 非法抽样方法 '{method}': {e}", err=True)
+            sys.exit(EXIT_RULE_INVALID)
     if mode:
-        from .sampling import SampleSizeMode
-        rule.mode = SampleSizeMode(mode)
+        try:
+            rule.mode = SampleSizeMode(mode)
+        except ValueError as e:
+            click.echo(f"[ERROR] 非法样本量模式 '{mode}': {e}", err=True)
+            sys.exit(EXIT_RULE_INVALID)
     if sample_size > 0:
         rule.sample_size = sample_size
     if percentage > 0:
@@ -196,11 +249,25 @@ def plan(
         rule.pps_size_col = pps_size_col
     if pps_replace is not None:
         rule.pps_replace = pps_replace
+    if pps_fallback is not None:
+        rule.pps_fallback = pps_fallback
+
+    required_cols = set()
+    if rule.stratify_by:
+        required_cols.add(rule.stratify_by)
+    if rule.cluster_by:
+        required_cols.add(rule.cluster_by)
+    if rule.pps_size_col:
+        required_cols.add(rule.pps_size_col)
 
     effective_batch_col = batch_col or rule.stratify_by
-    if effective_batch_col and effective_batch_col not in ds.columns:
-        click.echo(f"[ERROR] 批次/分层列 '{effective_batch_col}' 不存在于数据中", err=True)
-        sys.exit(EXIT_DATA_ERROR)
+    if effective_batch_col:
+        required_cols.add(effective_batch_col)
+
+    missing_cols = [c for c in required_cols if c not in ds.columns]
+    if missing_cols:
+        click.echo(f"[ERROR] 数据缺少必需列: {missing_cols}", err=True)
+        sys.exit(EXIT_DATA_MISSING_COL)
 
     if batch_filter:
         selected = [x.strip() for x in batch_filter.split(",") if x.strip()]
@@ -217,8 +284,16 @@ def plan(
     try:
         sample = apply_sampling(population, rule)
     except ValueError as e:
-        click.echo(f"[ERROR] 抽样参数错误: {e}", err=True)
-        sys.exit(EXIT_SAMPLING_ERROR)
+        err_msg = str(e)
+        if "需要指定" in err_msg:
+            click.echo(f"[ERROR] 抽样参数缺失: {e}", err=True)
+            sys.exit(EXIT_CONFIG_MISSING)
+        elif "极不均衡" in err_msg or "无法" in err_msg:
+            click.echo(f"[ERROR] 抽样规则无法执行: {e}", err=True)
+            sys.exit(EXIT_RULE_INVALID)
+        else:
+            click.echo(f"[ERROR] 抽样参数错误: {e}", err=True)
+            sys.exit(EXIT_SAMPLING_ERROR)
     except Exception as e:
         click.echo(f"[ERROR] 抽样执行失败: {e}", err=True)
         sys.exit(EXIT_SAMPLING_ERROR)

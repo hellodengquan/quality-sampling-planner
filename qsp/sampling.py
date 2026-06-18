@@ -43,6 +43,8 @@ class SamplingRule:
     cluster_min_clusters: int = 2
     pps_size_col: Optional[str] = None
     pps_replace: bool = True
+    pps_imbalance_threshold: float = 0.001
+    pps_fallback: bool = True
     random_seed: Optional[int] = 42
     min_per_group: int = 1
     weights: Dict[str, float] = field(default_factory=dict)
@@ -243,18 +245,92 @@ def cluster_sample(
     return result
 
 
+class PPSSkewWarning:
+    """PPS 极不均衡回退警告."""
+
+    def __init__(self, reason: str, fallback: str, n_imbalanced: int,
+                 n_total: int, threshold: float):
+        self.reason = reason
+        self.fallback = fallback
+        self.n_imbalanced = n_imbalanced
+        self.n_total = n_total
+        self.threshold = threshold
+
+    def __repr__(self) -> str:
+        return (
+            f"PPSSkewWarning(reason={self.reason!r}, fallback={self.fallback!r}, "
+            f"n_imbalanced={self.n_imbalanced}/{self.n_total}, "
+            f"threshold={self.threshold})"
+        )
+
+
+def _detect_pps_skew(
+    sizes: "pd.Series[float]",
+    n: int,
+    threshold: float = 0.001,
+) -> Optional[PPSSkewWarning]:
+    """检测 PPS 规模分布是否极不均衡，返回警告或 None."""
+    n_zero = int((sizes == 0).sum())
+    total = sizes.sum()
+
+    if n_zero > 0 and total <= 0:
+        return PPSSkewWarning(
+            reason="all_zero", fallback="none",
+            n_imbalanced=n_zero, n_total=len(sizes), threshold=threshold,
+        )
+
+    if n_zero > 0:
+        return PPSSkewWarning(
+            reason="has_zero_weights",
+            fallback="exclude_zero_then_pps",
+            n_imbalanced=n_zero, n_total=len(sizes), threshold=threshold,
+        )
+
+    if total <= 0:
+        return None
+
+    probs = sizes / total
+
+    max_prob = float(probs.max())
+    if max_prob > 0.5 and n > 3:
+        return PPSSkewWarning(
+            reason="single_dominant_weight",
+            fallback="cap_and_redistribute",
+            n_imbalanced=1, n_total=len(sizes), threshold=threshold,
+        )
+
+    n_below = int((probs < threshold).sum())
+    if n_below > len(sizes) * 0.3:
+        return PPSSkewWarning(
+            reason="too_many_tiny_weights",
+            fallback="blend_equal_and_pps",
+            n_imbalanced=n_below, n_total=len(sizes), threshold=threshold,
+        )
+
+    return None
+
+
 def pps_sample(
     df: pd.DataFrame,
     n: int,
     size_col: str,
     seed: Optional[int] = None,
     replace: bool = True,
+    imbalance_threshold: float = 0.001,
+    fallback: bool = True,
 ) -> pd.DataFrame:
     """PPS 抽样 (Probability Proportional to Size).
 
     按与规模大小成比例的概率抽样。
     size_col 为规模指标列，值越大被抽中概率越高。
     replace=True 为有放回 PPS（汉森-赫维茨估计），replace=False 为无放回 PPS。
+
+    当规模分布极不均衡时（零权重、过多极小权重、单权重主导），
+    若 fallback=True 则自动回退到修正策略而非直接报错：
+      - has_zero_weights → 排除零值后对剩余做 PPS
+      - too_many_tiny_weights → 等概率与 PPS 各 50% 混合
+      - single_dominant_weight → 截断最大权重并重新分配
+    若 fallback=False 则抛出 ValueError。
     """
     if size_col not in df.columns:
         raise ValueError(f"规模列 '{size_col}' 不存在于数据中")
@@ -264,20 +340,64 @@ def pps_sample(
         raise ValueError(f"规模列 '{size_col}' 含有非数值或空值")
     if (sizes < 0).any():
         raise ValueError(f"规模列 '{size_col}' 含有负值，无法作为抽样概率权重")
-    total = sizes.sum()
-    if total <= 0:
-        raise ValueError(f"规模列 '{size_col}' 总和非正，无法计算概率")
-    if not replace and (sizes == 0).any() and n > (sizes > 0).sum():
-        raise ValueError(
-            f"无放回 PPS 抽样中，规模为 0 的样本无法被抽中；"
-            f"有效样本数 {(sizes > 0).sum()} 小于请求样本量 {n}"
-        )
 
     if n <= 0:
         raise ValueError("样本量 n 必须为正整数")
     if n > len(df):
         n = len(df)
 
+    skew = _detect_pps_skew(sizes, n, threshold=imbalance_threshold)
+
+    if skew is not None and skew.reason == "all_zero":
+        raise ValueError(
+            f"规模列 '{size_col}' 全部为零，无有效样本可做 PPS 抽样"
+        )
+
+    total = sizes.sum()
+    if total <= 0:
+        raise ValueError(f"规模列 '{size_col}' 总和非正，无法计算概率")
+
+    if skew is not None:
+        if not fallback:
+            raise ValueError(
+                f"PPS 规模分布极不均衡 ({skew.reason})，"
+                f"影响 {skew.n_imbalanced}/{skew.n_total} 个样本；"
+                f"设置 fallback=True 可自动回退"
+            )
+
+        if skew.reason == "has_zero_weights":
+            valid_mask = sizes > 0
+            valid_df = df[valid_mask].reset_index(drop=True)
+            valid_sizes = sizes[valid_mask].reset_index(drop=True)
+            if len(valid_df) == 0:
+                raise ValueError(
+                    f"规模列 '{size_col}' 全部为零，无有效样本可做 PPS 抽样"
+                )
+            if not replace and n > len(valid_df):
+                raise ValueError(
+                    f"排除零权重后有效样本 {len(valid_df)} < 请求样本量 {n}，"
+                    f"无法完成无放回 PPS 抽样"
+                )
+            return _pps_core(valid_df, valid_sizes, n, seed, replace)
+
+        elif skew.reason == "too_many_tiny_weights":
+            return _pps_blend_equal_and_weighted(df, sizes, n, seed, replace)
+
+        elif skew.reason == "single_dominant_weight":
+            return _pps_cap_and_redistribute(df, sizes, n, seed, replace)
+
+    return _pps_core(df, sizes, n, seed, replace)
+
+
+def _pps_core(
+    df: pd.DataFrame,
+    sizes: "pd.Series[float]",
+    n: int,
+    seed: Optional[int],
+    replace: bool,
+) -> pd.DataFrame:
+    """核心 PPS 抽样，假定 sizes 已校验且全部 > 0."""
+    total = sizes.sum()
     rng = random.Random(seed)
     probs = (sizes / total).tolist()
 
@@ -285,8 +405,6 @@ def pps_sample(
         indices = rng.choices(range(len(df)), weights=probs, k=n)
         result = df.iloc[indices].reset_index(drop=True)
     else:
-        if n > len(df):
-            raise ValueError("无放回 PPS 抽样样本量不能超过总体数量")
         remaining = list(range(len(df)))
         remaining_probs = list(probs)
         selected = []
@@ -299,6 +417,131 @@ def pps_sample(
             selected.append(remaining[idx_in_remain])
             remaining.pop(idx_in_remain)
             remaining_probs.pop(idx_in_remain)
+        result = df.iloc[selected].reset_index(drop=True)
+
+    return result
+
+
+def _pps_blend_equal_and_weighted(
+    df: pd.DataFrame,
+    sizes: "pd.Series[float]",
+    n: int,
+    seed: Optional[int],
+    replace: bool,
+) -> pd.DataFrame:
+    """等概率与 PPS 各 50% 混合回退策略."""
+    n_equal = max(1, n // 2)
+    n_weighted = n - n_equal
+
+    total = sizes.sum()
+    rng = random.Random(seed)
+
+    if replace:
+        equal_indices = rng.choices(range(len(df)), k=n_equal)
+        weighted_indices = rng.choices(range(len(df)), weights=(sizes / total).tolist(), k=n_weighted)
+        all_indices = equal_indices + weighted_indices
+        rng.shuffle(all_indices)
+        result = df.iloc[all_indices].reset_index(drop=True)
+    else:
+        selected = set()
+        total_w = float(sizes.sum())
+        weights = (sizes / total_w).tolist()
+        remaining = list(range(len(df)))
+        remaining_weights = list(weights)
+
+        equal_pool = list(range(len(df)))
+        rng.shuffle(equal_pool)
+        for idx in equal_pool:
+            if len(selected) >= n_equal:
+                break
+            selected.add(idx)
+
+        for _ in range(n_weighted):
+            if len(selected) >= n:
+                break
+            if not remaining:
+                break
+            cur_total = sum(remaining_weights)
+            if cur_total <= 0:
+                remaining_indices = [i for i in remaining if i not in selected]
+                if remaining_indices:
+                    pick = rng.choice(remaining_indices)
+                    selected.add(pick)
+                break
+            norm = [w / cur_total for w in remaining_weights]
+            pick_local = rng.choices(range(len(remaining)), weights=norm, k=1)[0]
+            picked = remaining[pick_local]
+            selected.add(picked)
+            remaining.pop(pick_local)
+            remaining_weights.pop(pick_local)
+
+        if len(selected) < n:
+            leftover = [i for i in range(len(df)) if i not in selected]
+            rng.shuffle(leftover)
+            for idx in leftover:
+                if len(selected) >= n:
+                    break
+                selected.add(idx)
+
+        result = df.iloc[sorted(selected)].reset_index(drop=True)
+
+    return result.head(n)
+
+
+def _pps_cap_and_redistribute(
+    df: pd.DataFrame,
+    sizes: "pd.Series[float]",
+    n: int,
+    seed: Optional[int],
+    replace: bool,
+) -> pd.DataFrame:
+    """截断最大权重并重新分配回退策略.
+
+    将任何超过 0.5 的权重截断到 0.5，溢出部分平均分配给其余项。
+    """
+    total = float(sizes.sum())
+    probs = sizes / total
+    cap = 0.5
+    capped = probs.copy()
+
+    overflow = 0.0
+    dominant_indices = []
+    for i, p in enumerate(capped):
+        if p > cap:
+            overflow += p - cap
+            capped.iloc[i] = cap
+            dominant_indices.append(i)
+
+    if dominant_indices and overflow > 0:
+        non_dominant = [i for i in range(len(capped)) if i not in dominant_indices]
+        if non_dominant:
+            per_item = overflow / len(non_dominant)
+            for i in non_dominant:
+                capped.iloc[i] += per_item
+        else:
+            per_item = overflow / len(dominant_indices)
+            for i in dominant_indices:
+                capped.iloc[i] += per_item
+
+    rng = random.Random(seed)
+    weights = capped.tolist()
+
+    if replace:
+        indices = rng.choices(range(len(df)), weights=weights, k=n)
+        result = df.iloc[indices].reset_index(drop=True)
+    else:
+        remaining = list(range(len(df)))
+        remaining_weights = list(weights)
+        selected = []
+        for _ in range(n):
+            cur_total = sum(remaining_weights)
+            if cur_total <= 0:
+                break
+            norm = [w / cur_total for w in remaining_weights]
+            idx_local = rng.choices(range(len(remaining)), weights=norm, k=1)[0]
+            selected.append(remaining[idx_local])
+            remaining.pop(idx_local)
+            remaining_weights.pop(idx_local)
         result = df.iloc[selected].reset_index(drop=True)
 
     return result
@@ -329,7 +572,12 @@ def apply_sampling(df: pd.DataFrame, rule: SamplingRule) -> pd.DataFrame:
     elif rule.method == SamplingMethod.PPS:
         if not rule.pps_size_col:
             raise ValueError("PPS 抽样需要指定 pps_size_col 参数 (规模列)")
-        return pps_sample(df, n, rule.pps_size_col, rule.random_seed, rule.pps_replace)
+        return pps_sample(
+            df, n, rule.pps_size_col, rule.random_seed,
+            replace=rule.pps_replace,
+            imbalance_threshold=rule.pps_imbalance_threshold,
+            fallback=rule.pps_fallback,
+        )
     else:
         raise ValueError(f"未知的抽样方法: {rule.method}")
 
@@ -352,6 +600,8 @@ def load_rule_from_config(config: Dict[str, Any]) -> SamplingRule:
         cluster_min_clusters=int(config.get("cluster_min_clusters", 2)),
         pps_size_col=config.get("pps_size_col"),
         pps_replace=bool(config.get("pps_replace", True)),
+        pps_imbalance_threshold=float(config.get("pps_imbalance_threshold", 0.001)),
+        pps_fallback=bool(config.get("pps_fallback", True)),
         random_seed=config.get("random_seed", 42),
         min_per_group=int(config.get("min_per_group", 1)),
         weights=config.get("weights", {}) or {},

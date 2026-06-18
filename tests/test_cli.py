@@ -7,12 +7,15 @@ import pytest
 from click.testing import CliRunner
 
 from qsp.cli import (
+    EXIT_CONFIG_MISSING,
     EXIT_DATA_ERROR,
+    EXIT_DATA_MISSING_COL,
     EXIT_GENERAL_ERROR,
     EXIT_IO_ERROR,
     EXIT_OK,
     EXIT_RISK_CRITICAL,
     EXIT_RISK_HIGH,
+    EXIT_RULE_INVALID,
     EXIT_SAMPLING_ERROR,
     cli,
 )
@@ -95,7 +98,7 @@ class TestPlanExitCodes:
             "--method", "stratified",
             "-q",
         ])
-        assert result.exit_code == EXIT_SAMPLING_ERROR
+        assert result.exit_code == EXIT_CONFIG_MISSING
 
     def test_plan_missing_pps_param(self, runner, sample_csv):
         result = runner.invoke(cli, [
@@ -103,7 +106,7 @@ class TestPlanExitCodes:
             "--method", "pps",
             "-q",
         ])
-        assert result.exit_code == EXIT_SAMPLING_ERROR
+        assert result.exit_code == EXIT_CONFIG_MISSING
 
     def test_plan_pps_ok(self, runner, sample_csv):
         result = runner.invoke(cli, [
@@ -134,7 +137,7 @@ class TestPlanExitCodes:
             "-b", "no_such_col",
             "-q",
         ])
-        assert result.exit_code == EXIT_DATA_ERROR
+        assert result.exit_code == EXIT_DATA_MISSING_COL
 
     def test_plan_batch_filter_empty(self, runner, sample_csv):
         result = runner.invoke(cli, [
@@ -238,8 +241,129 @@ class TestExitConstants:
             EXIT_RISK_HIGH,
             EXIT_DATA_ERROR,
             EXIT_IO_ERROR,
+            EXIT_CONFIG_MISSING,
+            EXIT_RULE_INVALID,
+            EXIT_DATA_MISSING_COL,
         }
-        assert len(codes) == 7
+        assert len(codes) == 10
 
     def test_exit_ok_is_zero(self):
         assert EXIT_OK == 0
+
+
+class TestConfigMissingExitCode:
+    def test_missing_stratify_param_returns_config_missing(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "stratified",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+
+    def test_missing_cluster_param_returns_config_missing(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "cluster",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+
+    def test_missing_pps_param_returns_config_missing(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "pps",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+
+
+class TestRuleInvalidExitCode:
+    def test_rule_file_bad_format(self, runner, sample_csv, tmp_path):
+        rule_p = tmp_path / "bad_rule.txt"
+        rule_p.write_text("not yaml or json")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", str(rule_p),
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+
+    def test_rule_file_invalid_yaml_content(self, runner, sample_csv, tmp_path):
+        rule_p = tmp_path / "bad_rule.yaml"
+        rule_p.write_text("method: invalid_method_xyz\nmode: fixed\n")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", str(rule_p),
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+
+    def test_rule_file_not_exists(self, runner, sample_csv, tmp_path):
+        rule_p = str(tmp_path / "no_such_rule.yaml")
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-r", rule_p,
+            "-q",
+        ])
+        assert result.exit_code == EXIT_CONFIG_MISSING
+
+    def test_pps_no_fallback_skew_returns_rule_invalid(self, runner, tmp_path):
+        p = tmp_path / "skew.csv"
+        pd.DataFrame({
+            "id": list(range(6)),
+            "batch_id": ["A"] * 3 + ["B"] * 3,
+            "size": [0, 0, 10, 20, 30, 40],
+        }).to_csv(p, index=False)
+        result = runner.invoke(cli, [
+            "plan", str(p),
+            "--method", "pps",
+            "--pps-size-col", "size",
+            "--pps-no-fallback",
+            "-n", "3",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_RULE_INVALID
+
+
+class TestDataMissingColExitCode:
+    def test_stratify_col_not_in_data(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "stratified",
+            "--stratify-by", "nonexistent_col",
+            "-n", "10",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+
+    def test_cluster_col_not_in_data(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "cluster",
+            "--cluster-by", "nonexistent_col",
+            "-n", "10",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+
+    def test_pps_size_col_not_in_data(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "--method", "pps",
+            "--pps-size-col", "nonexistent_col",
+            "-n", "10",
+            "--mode", "fixed",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL
+
+    def test_batch_col_not_in_data(self, runner, sample_csv):
+        result = runner.invoke(cli, [
+            "plan", sample_csv,
+            "-b", "nonexistent_col",
+            "-q",
+        ])
+        assert result.exit_code == EXIT_DATA_MISSING_COL

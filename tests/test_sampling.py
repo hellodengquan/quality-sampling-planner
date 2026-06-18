@@ -15,6 +15,8 @@ from qsp.sampling import (
     determine_sample_size,
     load_rule_from_config,
     pps_sample,
+    _detect_pps_skew,
+    PPSSkewWarning,
     simple_random_sample,
     stratified_sample,
     systematic_sample,
@@ -204,18 +206,131 @@ class TestPPSSample:
 
     def test_all_zero_size_raises(self):
         df = pd.DataFrame({"x": [0, 0, 0]})
-        with pytest.raises(ValueError, match="总和非正"):
+        with pytest.raises(ValueError, match="全部为零"):
             pps_sample(df, 2, "x")
 
     def test_some_zero_without_replace_raises_when_n_too_large(self):
         df = pd.DataFrame({"x": [0, 1, 1, 1]})
-        with pytest.raises(ValueError, match="有效样本数"):
+        with pytest.raises(ValueError, match="排除零权重后有效样本"):
             pps_sample(df, 4, "x", replace=False)
 
     def test_seed_reproducible(self, sample_df):
         a = pps_sample(sample_df, 25, "value", seed=99, replace=True)
         b = pps_sample(sample_df, 25, "value", seed=99, replace=True)
         pd.testing.assert_frame_equal(a, b)
+
+
+class TestPPSSkewDetection:
+    def test_no_skew(self):
+        sizes = pd.Series([10, 20, 30, 40])
+        assert _detect_pps_skew(sizes, 3) is None
+
+    def test_zero_weights_detected(self):
+        sizes = pd.Series([0, 0, 10, 20])
+        warn = _detect_pps_skew(sizes, 3)
+        assert warn is not None
+        assert warn.reason == "has_zero_weights"
+        assert warn.n_imbalanced == 2
+
+    def test_all_zero_detected(self):
+        sizes = pd.Series([0, 0, 0])
+        warn = _detect_pps_skew(sizes, 2)
+        assert warn is not None
+        assert warn.reason == "all_zero"
+
+    def test_too_many_tiny_weights(self):
+        sizes = pd.Series([1, 1, 1, 1, 1, 1, 1, 1, 100, 100, 100])
+        warn = _detect_pps_skew(sizes, 5, threshold=0.01)
+        assert warn is not None
+        assert warn.reason == "too_many_tiny_weights"
+
+    def test_single_dominant_weight(self):
+        sizes = pd.Series([10000, 1, 1, 1])
+        warn = _detect_pps_skew(sizes, 4)
+        assert warn is not None
+        assert warn.reason == "single_dominant_weight"
+
+
+class TestPPSFallbackBranches:
+    def test_has_zero_weights_fallback_excludes_zeros(self):
+        df = pd.DataFrame({
+            "id": list(range(10)),
+            "size": [0, 0, 0, 10, 20, 30, 40, 50, 60, 70],
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
+        assert len(result) == 5
+        for _, row in result.iterrows():
+            assert row["size"] > 0
+
+    def test_has_zero_weights_no_fallback_raises(self):
+        df = pd.DataFrame({
+            "id": list(range(5)),
+            "size": [0, 0, 10, 20, 30],
+        })
+        with pytest.raises(ValueError, match="极不均衡"):
+            pps_sample(df, 3, "size", seed=42, fallback=False)
+
+    def test_all_zero_fallback_raises(self):
+        df = pd.DataFrame({"id": [1, 2, 3], "size": [0, 0, 0]})
+        with pytest.raises(ValueError, match="全部为零"):
+            pps_sample(df, 2, "size", seed=42, fallback=True)
+
+    def test_too_many_tiny_weights_blend_fallback(self):
+        sizes = [1, 1, 1, 1, 1, 1, 1, 1, 1, 100000]
+        df = pd.DataFrame({"id": list(range(10)), "size": sizes})
+        result = pps_sample(df, 6, "size", seed=42, replace=False, fallback=True)
+        assert len(result) == 6
+        assert result["id"].nunique() == 6
+
+    def test_single_dominant_weight_cap_fallback(self):
+        df = pd.DataFrame({
+            "id": list(range(6)),
+            "size": [10000, 1, 1, 1, 1, 1],
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
+        assert len(result) == 5
+        assert result["id"].nunique() == 5
+
+    def test_single_dominant_cap_with_replace(self):
+        df = pd.DataFrame({
+            "id": list(range(6)),
+            "size": [10000, 1, 1, 1, 1, 1],
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
+        assert len(result) == 5
+        assert result["id"].nunique() == 5
+
+    def test_single_dominant_cap_with_replace_allows_dup(self):
+        df = pd.DataFrame({
+            "id": list(range(5)),
+            "size": [9999, 1, 1, 1, 1],
+        })
+        result = pps_sample(df, 8, "size", seed=42, replace=True, fallback=True)
+        assert len(result) == 5
+
+    def test_zero_weights_replace_fallback(self):
+        df = pd.DataFrame({
+            "id": list(range(8)),
+            "size": [0, 0, 10, 20, 30, 40, 50, 60],
+        })
+        result = pps_sample(df, 5, "size", seed=42, replace=True, fallback=True)
+        assert len(result) == 5
+        for _, row in result.iterrows():
+            assert row["size"] > 0
+
+    def test_zero_weights_without_replace_n_exceeds_valid(self):
+        df = pd.DataFrame({
+            "id": list(range(5)),
+            "size": [0, 0, 10, 20, 30],
+        })
+        with pytest.raises(ValueError, match="排除零权重后有效样本"):
+            pps_sample(df, 5, "size", seed=42, replace=False, fallback=True)
+
+    def test_blend_fallback_no_replace_small_n(self):
+        sizes = [1, 1, 1, 1, 1, 1, 1, 1, 1, 100000]
+        df = pd.DataFrame({"id": list(range(10)), "size": sizes})
+        result = pps_sample(df, 3, "size", seed=42, replace=False, fallback=True)
+        assert len(result) == 3
 
 
 class TestApplySampling:
