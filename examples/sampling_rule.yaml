@@ -1,0 +1,33 @@
+# 质检抽样规则配置示例
+# 方法: random | simple | stratified | systematic | cluster
+method: stratified
+
+# 样本量计算模式: fixed | percentage | statistical
+mode: statistical
+
+# fixed 模式使用
+sample_size: 0
+
+# percentage 模式使用 (0~1)
+percentage: 0.10
+
+# statistical 模式使用
+confidence_level: 0.95       # 置信水平: 0.90 | 0.95 | 0.99 | 0.999
+margin_of_error: 0.05        # 边际误差 (0~1)
+expected_defect_rate: 0.03   # 预期缺陷率 (0~1)
+
+# 分层抽样: 指定分层列
+stratify_by: "batch_id"
+
+# 整群抽样: 指定整群列
+cluster_by: null
+
+# 随机种子 (可复现)
+random_seed: 42
+
+# 分层抽样每组合格最小样本数
+min_per_group: 3
+
+# 分层权重 (可选, 按组名覆盖比例分配)
+weights:
+  # "BATCH-2024-05": 0.3
